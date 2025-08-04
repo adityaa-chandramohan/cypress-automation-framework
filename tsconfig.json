@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"],
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "declaration": true,
+    "outDir": "./dist",
+    "rootDir": "./",
+    "baseUrl": "./",
+    "paths": {
+      "@pages/*": ["src/pages/*"],
+      "@keywords/*": ["src/keywords/*"],
+      "@utils/*": ["src/utils/*"],
+      "@config/*": ["src/config/*"],
+      "@fixtures/*": ["src/fixtures/*"],
+      "@types/*": ["src/types/*"]
+    },
+    "types": ["cypress", "node"]
+  },
+  "include": [
+    "src/**/*",
+    "tests/**/*",
+    "cypress/**/*",
+    "cypress.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "reports",
+    "allure-results",
+    "allure-report"
+  ]
+}

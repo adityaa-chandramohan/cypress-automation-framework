@@ -1,0 +1,162 @@
+{
+  "dev": {
+    "baseUrl": "https://dev.example.com",
+    "apiUrl": "https://api-dev.example.com",
+    "environment": "development",
+    "timeout": {
+      "default": 10000,
+      "page": 30000,
+      "api": 15000
+    },
+    "users": {
+      "admin": {
+        "username": "admin@dev.example.com",
+        "password": "${DEV_ADMIN_PASSWORD}"
+      },
+      "user": {
+        "username": "user@dev.example.com", 
+        "password": "${DEV_USER_PASSWORD}"
+      }
+    },
+    "features": {
+      "visualTesting": true,
+      "autoHealing": true,
+      "apiTesting": true
+    },
+    "database": {
+      "host": "dev-db.example.com",
+      "port": 5432,
+      "name": "testdb_dev"
+    },
+    "integrations": {
+      "slack": {
+        "enabled": false,
+        "webhook": ""
+      },
+      "jira": {
+        "enabled": false,
+        "url": ""
+      }
+    }
+  },
+  "staging": {
+    "baseUrl": "https://staging.example.com",
+    "apiUrl": "https://api-staging.example.com",
+    "environment": "staging",
+    "timeout": {
+      "default": 15000,
+      "page": 45000,
+      "api": 20000
+    },
+    "users": {
+      "admin": {
+        "username": "admin@staging.example.com",
+        "password": "${STAGING_ADMIN_PASSWORD}"
+      },
+      "user": {
+        "username": "user@staging.example.com",
+        "password": "${STAGING_USER_PASSWORD}"
+      }
+    },
+    "features": {
+      "visualTesting": true,
+      "autoHealing": true,
+      "apiTesting": true
+    },
+    "database": {
+      "host": "staging-db.example.com",
+      "port": 5432,
+      "name": "testdb_staging"
+    },
+    "integrations": {
+      "slack": {
+        "enabled": true,
+        "webhook": "https://hooks.slack.com/services/staging/webhook"
+      },
+      "jira": {
+        "enabled": true,
+        "url": "https://company.atlassian.net"
+      }
+    }
+  },
+  "prod": {
+    "baseUrl": "https://example.com",
+    "apiUrl": "https://api.example.com",
+    "environment": "production",
+    "timeout": {
+      "default": 20000,
+      "page": 60000,
+      "api": 30000
+    },
+    "users": {
+      "admin": {
+        "username": "admin@example.com",
+        "password": "${PROD_ADMIN_PASSWORD}"
+      },
+      "user": {
+        "username": "user@example.com",
+        "password": "${PROD_USER_PASSWORD}"
+      }
+    },
+    "features": {
+      "visualTesting": false,
+      "autoHealing": true,
+      "apiTesting": false
+    },
+    "database": {
+      "host": "prod-db.example.com",
+      "port": 5432,
+      "name": "testdb_prod"
+    },
+    "integrations": {
+      "slack": {
+        "enabled": true,
+        "webhook": "https://hooks.slack.com/services/prod/webhook"
+      },
+      "jira": {
+        "enabled": true,
+        "url": "https://company.atlassian.net"
+      }
+    }
+  },
+  "local": {
+    "baseUrl": "http://localhost:3000",
+    "apiUrl": "http://localhost:8080/api",
+    "environment": "local",
+    "timeout": {
+      "default": 5000,
+      "page": 15000,
+      "api": 10000
+    },
+    "users": {
+      "admin": {
+        "username": "admin@localhost",
+        "password": "${LOCAL_ADMIN_PASSWORD}"
+      },
+      "user": {
+        "username": "user@localhost",
+        "password": "${LOCAL_USER_PASSWORD}"
+      }
+    },
+    "features": {
+      "visualTesting": true,
+      "autoHealing": true,
+      "apiTesting": true
+    },
+    "database": {
+      "host": "localhost",
+      "port": 5432,
+      "name": "testdb_local"
+    },
+    "integrations": {
+      "slack": {
+        "enabled": false,
+        "webhook": ""
+      },
+      "jira": {
+        "enabled": false,
+        "url": ""
+      }
+    }
+  }
+}

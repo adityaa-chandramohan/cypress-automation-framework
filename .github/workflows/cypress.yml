@@ -1,0 +1,527 @@
+name: Cypress Automation Framework
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to test'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      test_suite:
+        description: 'Test suite to run'
+        required: true
+        default: 'smoke'
+        type: choice
+        options:
+        - smoke
+        - regression
+        - integration
+        - visual
+        - all
+      browser:
+        description: 'Browser to test'
+        required: true
+        default: 'chrome'
+        type: choice
+        options:
+        - chrome
+        - firefox
+        - edge
+        - all
+
+env:
+  CYPRESS_CACHE_FOLDER: ~/.cache/Cypress
+  NODE_VERSION: '18'
+
+jobs:
+  # Job 1: Install dependencies and cache
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      cypress-version: ${{ steps.cypress-version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Get Cypress version
+        id: cypress-version
+        run: |
+          echo "version=$(npm list cypress --depth=0 | grep cypress | cut -d'@' -f2)" >> $GITHUB_OUTPUT
+
+      - name: Cache Cypress binary
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-${{ runner.os }}-${{ steps.cypress-version.outputs.version }}
+          restore-keys: |
+            cypress-${{ runner.os }}-
+
+      - name: Install Cypress binary
+        run: npx cypress install
+
+      - name: Verify Cypress
+        run: npx cypress verify
+
+  # Job 2: Lint and type check
+  quality-checks:
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Run type checking
+        run: npm run type-check
+
+  # Job 3: Smoke tests (always run)
+  smoke-tests:
+    runs-on: ubuntu-latest
+    needs: [setup, quality-checks]
+    if: github.event.inputs.test_suite == 'smoke' || github.event.inputs.test_suite == 'all' || github.event.inputs.test_suite == '' || github.event_name != 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: ${{ github.event.inputs.browser == 'all' && fromJson('["chrome", "firefox", "edge"]') || fromJson(format('["{0}"]', github.event.inputs.browser || 'chrome')) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Cypress binary
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-${{ runner.os }}-${{ needs.setup.outputs.cypress-version }}
+
+      - name: Run smoke tests
+        run: npm run cy:run:smoke
+        env:
+          CYPRESS_BROWSER: ${{ matrix.browser }}
+          CYPRESS_ENV: ${{ github.event.inputs.environment || 'staging' }}
+          CYPRESS_baseUrl: ${{ secrets[format('BASE_URL_{0}', upper(github.event.inputs.environment || 'staging'))] }}
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v3
+        if: failure()
+        with:
+          name: smoke-screenshots-${{ matrix.browser }}
+          path: cypress/screenshots
+          retention-days: 7
+
+      - name: Upload videos
+        uses: actions/upload-artifact@v3
+        if: failure()
+        with:
+          name: smoke-videos-${{ matrix.browser }}
+          path: cypress/videos
+          retention-days: 7
+
+  # Job 4: Regression tests (parallel execution)
+  regression-tests:
+    runs-on: ubuntu-latest
+    needs: [setup, quality-checks, smoke-tests]
+    if: github.event.inputs.test_suite == 'regression' || github.event.inputs.test_suite == 'all' || (github.event_name == 'schedule')
+    strategy:
+      fail-fast: false
+      matrix:
+        containers: [1, 2, 3, 4] # Parallel execution across 4 containers
+        browser: ${{ github.event.inputs.browser == 'all' && fromJson('["chrome", "firefox"]') || fromJson(format('["{0}"]', github.event.inputs.browser || 'chrome')) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Cypress binary
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-${{ runner.os }}-${{ needs.setup.outputs.cypress-version }}
+
+      - name: Run regression tests
+        run: |
+          npx cypress run \
+            --browser ${{ matrix.browser }} \
+            --spec "tests/regression/**/*.spec.ts" \
+            --record \
+            --parallel \
+            --ci-build-id ${{ github.run_id }}-${{ matrix.browser }}
+        env:
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+          CYPRESS_ENV: ${{ github.event.inputs.environment || 'staging' }}
+          CYPRESS_baseUrl: ${{ secrets[format('BASE_URL_{0}', upper(github.event.inputs.environment || 'staging'))] }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: regression-results-${{ matrix.browser }}-${{ matrix.containers }}
+          path: |
+            cypress/reports
+            cypress/screenshots
+            cypress/videos
+          retention-days: 14
+
+  # Job 5: Integration tests
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: [setup, quality-checks]
+    if: github.event.inputs.test_suite == 'integration' || github.event.inputs.test_suite == 'all'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Cypress binary
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-${{ runner.os }}-${{ needs.setup.outputs.cypress-version }}
+
+      - name: Run integration tests
+        run: npm run cy:run:integration
+        env:
+          CYPRESS_ENV: ${{ github.event.inputs.environment || 'staging' }}
+          CYPRESS_baseUrl: ${{ secrets[format('BASE_URL_{0}', upper(github.event.inputs.environment || 'staging'))] }}
+          CYPRESS_API_URL: ${{ secrets[format('API_URL_{0}', upper(github.event.inputs.environment || 'staging'))] }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: integration-results
+          path: |
+            cypress/reports
+            cypress/screenshots
+            cypress/videos
+          retention-days: 14
+
+  # Job 6: Visual regression tests
+  visual-tests:
+    runs-on: ubuntu-latest
+    needs: [setup, quality-checks]
+    if: github.event.inputs.test_suite == 'visual' || github.event.inputs.test_suite == 'all'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Cypress binary
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-${{ runner.os }}-${{ needs.setup.outputs.cypress-version }}
+
+      - name: Restore visual baselines
+        uses: actions/cache@v3
+        with:
+          path: cypress/screenshots/baseline
+          key: visual-baselines-${{ github.ref }}-${{ hashFiles('tests/visual/**/*.spec.ts') }}
+          restore-keys: |
+            visual-baselines-${{ github.ref }}-
+            visual-baselines-main-
+
+      - name: Run visual tests
+        run: npm run cy:run:visual
+        env:
+          CYPRESS_ENV: ${{ github.event.inputs.environment || 'staging' }}
+          CYPRESS_baseUrl: ${{ secrets[format('BASE_URL_{0}', upper(github.event.inputs.environment || 'staging'))] }}
+
+      - name: Upload visual test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: visual-results
+          path: |
+            cypress/screenshots
+            cypress/reports
+          retention-days: 30
+
+      - name: Cache updated baselines
+        uses: actions/cache@v3
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: cypress/screenshots/baseline
+          key: visual-baselines-${{ github.ref }}-${{ hashFiles('tests/visual/**/*.spec.ts') }}
+
+  # Job 7: Cross-browser testing (comprehensive)
+  cross-browser-tests:
+    runs-on: ubuntu-latest
+    needs: [setup, quality-checks, smoke-tests]
+    if: github.event.inputs.browser == 'all' || github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chrome, firefox, edge]
+        viewport: [desktop, tablet, mobile]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Cypress binary
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-${{ runner.os }}-${{ needs.setup.outputs.cypress-version }}
+
+      - name: Set viewport configuration
+        run: |
+          case "${{ matrix.viewport }}" in
+            desktop) echo "CYPRESS_viewportWidth=1280" >> $GITHUB_ENV; echo "CYPRESS_viewportHeight=720" >> $GITHUB_ENV ;;
+            tablet) echo "CYPRESS_viewportWidth=768" >> $GITHUB_ENV; echo "CYPRESS_viewportHeight=1024" >> $GITHUB_ENV ;;
+            mobile) echo "CYPRESS_viewportWidth=375" >> $GITHUB_ENV; echo "CYPRESS_viewportHeight=667" >> $GITHUB_ENV ;;
+          esac
+
+      - name: Run cross-browser tests
+        run: |
+          npx cypress run \
+            --browser ${{ matrix.browser }} \
+            --spec "tests/smoke/**/*.spec.ts,tests/regression/**/*.spec.ts" \
+            --config video=false
+        env:
+          CYPRESS_ENV: ${{ github.event.inputs.environment || 'staging' }}
+          CYPRESS_baseUrl: ${{ secrets[format('BASE_URL_{0}', upper(github.event.inputs.environment || 'staging'))] }}
+
+      - name: Upload cross-browser results
+        uses: actions/upload-artifact@v3
+        if: failure()
+        with:
+          name: cross-browser-${{ matrix.browser }}-${{ matrix.viewport }}
+          path: cypress/screenshots
+          retention-days: 7
+
+  # Job 8: Generate and publish reports
+  generate-reports:
+    runs-on: ubuntu-latest
+    needs: [smoke-tests, regression-tests, integration-tests, visual-tests]
+    if: always() && (needs.smoke-tests.result != 'skipped' || needs.regression-tests.result != 'skipped' || needs.integration-tests.result != 'skipped' || needs.visual-tests.result != 'skipped')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Merge test results
+        run: |
+          mkdir -p merged-reports
+          find artifacts -name "*.json" -path "*/reports/*" -exec cp {} merged-reports/ \;
+
+      - name: Generate Allure report
+        run: |
+          npm install -g allure-commandline
+          allure generate merged-reports --clean -o allure-report
+        continue-on-error: true
+
+      - name: Generate HTML report
+        run: |
+          npm run report:html
+        continue-on-error: true
+
+      - name: Deploy reports to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        if: github.ref == 'refs/heads/main'
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./allure-report
+          destination_dir: reports/${{ github.run_number }}
+
+      - name: Upload merged reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: merged-test-reports
+          path: |
+            allure-report
+            merged-reports
+          retention-days: 30
+
+  # Job 9: Notify on completion
+  notify:
+    runs-on: ubuntu-latest
+    needs: [smoke-tests, regression-tests, integration-tests, visual-tests, generate-reports]
+    if: always() && github.event_name != 'pull_request'
+    steps:
+      - name: Calculate test results
+        id: test-results
+        run: |
+          smoke_result="${{ needs.smoke-tests.result }}"
+          regression_result="${{ needs.regression-tests.result }}"
+          integration_result="${{ needs.integration-tests.result }}"
+          visual_result="${{ needs.visual-tests.result }}"
+          
+          # Determine overall status
+          if [[ "$smoke_result" == "failure" || "$regression_result" == "failure" || "$integration_result" == "failure" || "$visual_result" == "failure" ]]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+          elif [[ "$smoke_result" == "success" || "$regression_result" == "success" || "$integration_result" == "success" || "$visual_result" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=skipped" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Slack notification
+        uses: 8398a7/action-slack@v3
+        if: steps.test-results.outputs.status != 'skipped'
+        with:
+          status: ${{ steps.test-results.outputs.status }}
+          channel: '#qa-automation'
+          text: |
+            Cypress test run completed
+            Environment: ${{ github.event.inputs.environment || 'staging' }}
+            Test Suite: ${{ github.event.inputs.test_suite || 'smoke' }}
+            Browser: ${{ github.event.inputs.browser || 'chrome' }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Create GitHub issue on failure
+        if: steps.test-results.outputs.status == 'failure' && github.event_name == 'schedule'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Scheduled test run failed - ${new Date().toISOString().split('T')[0]}`,
+              body: `
+                ## Test Run Failure
+                
+                **Environment:** ${{ github.event.inputs.environment || 'staging' }}
+                **Run ID:** ${{ github.run_id }}
+                **Workflow:** ${{ github.workflow }}
+                
+                **Failed Jobs:**
+                - Smoke Tests: ${{ needs.smoke-tests.result }}
+                - Regression Tests: ${{ needs.regression-tests.result }}
+                - Integration Tests: ${{ needs.integration-tests.result }}
+                - Visual Tests: ${{ needs.visual-tests.result }}
+                
+                [View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+              `,
+              labels: ['bug', 'test-failure', 'automated']
+            })
+
+  # Job 10: Performance monitoring
+  performance-check:
+    runs-on: ubuntu-latest
+    needs: setup
+    if: github.event.inputs.test_suite == 'all' || github.event_name == 'schedule'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Cypress binary
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-${{ runner.os }}-${{ needs.setup.outputs.cypress-version }}
+
+      - name: Run performance tests
+        run: |
+          npx cypress run \
+            --spec "tests/**/*.spec.ts" \
+            --config video=false,screenshotOnRunFailure=false \
+            --env performance=true
+        env:
+          CYPRESS_ENV: ${{ github.event.inputs.environment || 'staging' }}
+          CYPRESS_baseUrl: ${{ secrets[format('BASE_URL_{0}', upper(github.event.inputs.environment || 'staging'))] }}
+
+      - name: Upload performance results
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-results
+          path: cypress/reports/performance
+          retention-days: 30
